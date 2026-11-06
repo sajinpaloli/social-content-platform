@@ -1,0 +1,30 @@
+import {useEffect,useState} from 'react';
+import {Plus,RefreshCw,Globe,Trash2,AlertCircle,Clock,CheckCircle2} from 'lucide-react';
+import {Button} from '@/components/ui/button';
+import {Field,Empty} from './shared';
+import {api,workflows,toLocalInput,type Business,type WebsitePage,type Suggestion} from '@/services/api';
+import {toast} from 'sonner';
+
+const STALE_DAYS=30;
+const fieldFor:Record<string,keyof Business>={'Services':'services','Audience':'audience','Tone of voice':'tone','Visual identity':'identity','Content topics':'emphasize','Marketing objectives':'objectives'};
+
+export function WebsiteAnalysis({business,onApply}:{business:Business;onApply:(b:Business)=>void}){
+ const[url,setUrl]=useState('');const[pages,setPages]=useState<WebsitePage[]>(()=>business.website?[{url:business.website,status:business.snapshot?'Fetched':'Not fetched',...(business.snapshot?{fetched:business.snapshot}:{})}]:[]);const[suggestions,setSuggestions]=useState<Suggestion[]>([]);const[busy,setBusy]=useState(false);const[failed,setFailed]=useState(false);
+ useEffect(()=>{let active=true;void api.getWebsiteAnalysis(business.id).then(result=>{if(!active)return;setPages(result.pages.length?result.pages:(business.website?[{url:business.website,status:'Not fetched'}]:[]));setSuggestions(result.suggestions)}).catch(()=>{});return()=>{active=false}},[business.id,business.website]);
+ const valid=/^https?:\/\/[^\s.]+\.[^\s]+$/.test(url);
+ const stale=business.snapshot&&(Date.now()-new Date(business.snapshot).getTime())/864e5>STALE_DAYS;
+ function add(){if(pages.some(p=>p.url===url)){toast.error('This page is already in the list.');return}setPages([...pages,{url,status:'Not fetched'}]);setUrl('')}
+ async function fetchAll(){setBusy(true);setFailed(false);setPages(pages.map(p=>({...p,status:'Fetching'})));try{const r=await workflows.fetchPages(business,pages);setPages(r.pages);setSuggestions(r.suggestions);if(!r.suggestions.length){setFailed(true);toast.error('No profile suggestions were returned.')}else toast.success('Website snapshot and profile suggestions are ready to review.')}catch(e){setFailed(true);setPages(pages.map(p=>({...p,status:'Failed'})));toast.error(e instanceof Error?e.message:'Website analysis failed.')}finally{setBusy(false)}}
+ function apply(){const chosen=suggestions.filter(s=>s.apply);if(!chosen.length){toast.error('Select at least one suggestion to apply.');return}const next={...business,snapshot:chosen[0]?.snapshot||toLocalInput(new Date())};for(const s of chosen){const key=fieldFor[s.group];if(key)(next as Record<string,unknown>)[key]=s.value}onApply(next);toast.success(`${chosen.length} suggestions applied. Save the business profile to persist your selected changes.`)}
+ const update=(id:string,patch:Partial<Suggestion>)=>setSuggestions(suggestions.map(s=>s.id===id?{...s,...patch}:s));
+ return <div className="form-section"><h2>Website analysis</h2><p className="sample-label my-2">Fetch public business pages and ask the configured AI provider for profile suggestions. Review every suggestion before applying it. Private or local network addresses are blocked.</p>
+  {!business.snapshot&&!suggestions.length&&<div className="notice mt-3"><Clock size={16}/>Website analysis has not run yet for this business.</div>}
+  {stale&&!suggestions.length&&<div className="notice warning mt-3"><Clock size={16}/>Snapshot is stale. Last updated {business.snapshot?.replace('T',' ')}, more than {STALE_DAYS} days ago. Refresh to review new suggestions.</div>}
+  <div className="flex gap-2 mt-4 items-end"><div className="flex-1"><Field label="Public page URL"><input type="url" placeholder="https://your-business.com/services" value={url} onChange={e=>setUrl(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&valid)add()}}/></Field></div><Button variant="outline" disabled={!valid} onClick={add}><Plus/>Add page</Button></div>
+  {pages.length?<ul className="page-list">{pages.map(p=><li key={p.url}><Globe size={15}/><span className="truncate">{p.url}</span><span className={`status ${p.status==='Failed'?'status-failed':p.status==='Fetched'?'status-published':'status-draft'}`}>{p.status==='Failed'?<AlertCircle size={12}/>:p.status==='Fetched'?<CheckCircle2 size={12}/>:<Clock size={12}/>}{p.status}</span><small>{p.fetched?`Fetched ${p.fetched.replace('T',' ')}`:'Not fetched yet'}</small><Button size="icon" variant="ghost" aria-label={`Remove ${p.url}`} disabled={busy} onClick={()=>setPages(pages.filter(x=>x.url!==p.url))}><Trash2/></Button></li>)}</ul>:<Empty title="No pages added" description="Add public website pages to analyse, such as your home, services and about pages."/>}
+  <Button className="mt-4" disabled={!pages.length||busy} onClick={fetchAll}><RefreshCw className={busy?'animate-spin':''}/>{busy?'Fetching website pages...':'Fetch and analyse pages'}</Button>
+  {failed&&<div className="notice warning mt-4"><AlertCircle size={16}/>We could not fetch these pages. Check that each URL is public and try again.</div>}
+  {busy&&<p className="text-sm text-muted-foreground mt-4">Fetching public pages and preparing profile suggestions…</p>}
+  {suggestions.length>0&&<div className="suggestions mt-5"><h3>Review suggestions</h3><p>AI suggestions are based on the fetched pages. Select each suggestion individually, edit its value if needed, then apply your selections. Suggestions flagged for manual review are still selectable.</p>{suggestions.map((s,i)=><div className="suggestion-item" key={s.id||`${s.group}-${i}`}><h4>{s.group||'Profile suggestion'}</h4><label className="checkbox-label"><input type="checkbox" checked={s.apply} onChange={e=>update(s.id,{apply:e.target.checked})}/>Apply this suggestion</label><textarea rows={2} aria-label={`${s.group||'Profile'} suggestion`} value={s.value} onChange={e=>update(s.id,{value:e.target.value})}/><small>Sources: {s.sources?.join(', ')||'Review the fetched pages'}{s.snapshot?` · Snapshot ${s.snapshot.replace('T',' ')}`:''}{s.group==='Brand colours'?' · Edit colours directly in the brand profile':''}</small></div>)}<Button onClick={apply}>Apply selected suggestions</Button></div>}
+ </div>;
+}
